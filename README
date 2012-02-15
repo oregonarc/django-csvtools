@@ -1,8 +1,11 @@
 Installation
 ------------
 
-Put CSVTOOL_MODELS in settings.py
+1. Put CSVTOOL_MODELS in settings.py
 
+2. Put csvtool.py somewhere in your project. I like utils/csvtool.py
+
+3. Then in a view initiate the uploader with an app.model string
 
 Example
 
