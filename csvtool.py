@@ -7,9 +7,12 @@ Comma Seperated Values format.
 
 
 """
+import unittest
+import datetime as dt
 import csv as csv_mod
 
 from django.forms import ModelForm
+from django.http import HttpResponse
 
 from fish.settings import CSVTOOL_MODELS, DATABASES, ROOT_PATH 
 
@@ -144,22 +147,44 @@ class CSVTool():
                 'ignored':ignored
                 }
     
+    def qs2response(self, qs):
+        """
+        Writes a query set in CSV format based on the input queryset, qs.
+        Returns an HttpReponse object containing the csv file.
+        """
+        
+        fields = [f['name'] for f in self.fields]
+        verbose = fields
+        body = []
+        
+        #for q in qs:
+        #    row = []
+        #    for f in fields:
+        #        row.append(q.__getattribute__(f))
+        #    body.append(row)
+        
+        body = ([q.__getattribute__(f) for f in fields] for q in qs)
+        out = self._make_csv_response(fields, body)
+        
+        return out                
     
-    def _validate_headers(headers, pkg):
+   
+    
+    def _validate_headers(self, headers, pkg):
         """
         Validates the given headers against the form field names
         
         """
         
         # Track headers
-        expected = ['id']+self.form().fields.keys()
+        expected = [field['name'] for field in self.fields if field['not_blank'] and field['not_null'] ]
         if not set(headers) >= set(expected):
             pkg['errors'].append('headers: <br />%s<br /> did not match expected headers of <br />%s<br />' % (headers, expected))
             return False
         else:
             return True
     
-    def _validate_row(row, pkg, row_num):
+    def _validate_row(self, row, pkg, row_num):
         """
         Takes the headers, a row, and a the form and validates the row 
         against the form using the headers
@@ -222,19 +247,17 @@ class CSVTool():
         
     def _get_form(self):
         """
-        Will attempt to load a form of with name ModelnameCSVForm from
-        appname.forms. If it cannot find a form there is will create one 
+        Will attempt to load a form with the name ModelnameCSVForm from
+        the apps forms.py. If it cannot find a form there is will create one 
         with _create_model_form.
         """
         
         app_name, model_name = self.app_model.split(".")
         
         try:
-            print "Looking for form"
             mod = __import__(self.project_name+"."+app_name+".forms" , globals(), locals(), -1)
             form = getattr(mod, model_name+"CSVForm")
         except: 
-            print "Could not find form. Creating form"
             form = self._create_model_form()
         self.form = form
         return self.form
@@ -269,13 +292,15 @@ class CSVTool():
                 
         return _ModelForm
     
+    def _get_fname(self):
+        now = dt.datetime.now()
+        return "%s_%s" %(self.app_model.replace(".","_"), now.strftime(self.tformat) )
+    
     def _dump_table(self, fname = None):
-        import datetime
         import commands
         
         if not fname:
-            now = datetime.datetime.now()
-            fname = "%s_%s" %(self.app_model.replace(".","_"), now.strftime(self.tformat) )  
+            fname = self._get_fname()  
                 
         dbname =     DATABASES['default']['NAME']
         dbpassword = DATABASES['default']['PASSWORD']
@@ -313,9 +338,34 @@ class CSVTool():
             
         else:
             raise Exception("%s is not a supported database type." %dbtype)
-                 
-        
+    
+            
+    def _make_csv_response(self, fields, body, fname=None):
+        """
+        Returns an HttpResponse object filled with the content
+        from header = [] and body = [[]] as a csv object. 
+            
+        """
+        if not fname:
+            fname = self._get_fname()+".csv"
+            
+                  
+        # Convert from generator to list
+        fields = list(fields)
+        body = list(body)
+            
+        response = HttpResponse(mimetype='text/csv')
+        response['Content-Disposition'] = 'attachment; filename=%s' %(fname)
+    
+        writer = csv_mod.writer(response)
+        writer.writerow(fields)  # Write the fields as headers
+        for row in body:
+            writer.writerow(row)
+    
+        return response
         
 #csv = CSVTool('wcgsi.Track')
 
+
+    
     
