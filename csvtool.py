@@ -7,14 +7,16 @@ Comma Seperated Values format.
 
 
 """
-import unittest
+import os
 import datetime as dt
 import csv as csv_mod
 
 from django.forms import ModelForm
 from django.http import HttpResponse
 
-from fish.settings import CSVTOOL_MODELS, DATABASES, ROOT_PATH 
+from fish.settings import CSVTOOL_MODELS, DATABASES, ROOT_PATH, TEMP_DIR
+
+REVERT_DT = 1*60*60  # Time in secs 
 
 class CSVTool():
     
@@ -123,7 +125,7 @@ class CSVTool():
         if not duplicate_entry:
             duplicate_entry = self.options['duplicate_entry']
         
-        backup_file = self._dump_table()
+        backup_file = self._dump_table() 
                         
         csv = csv_mod.DictReader(csv)
         row = csv.next()
@@ -415,8 +417,9 @@ class CSVTool():
         dbtable =    self.model._meta.db_table
         
         if dbtype == 'mysql':
-            
-            cmd = "mysqldump -u%s -p%s %s %s > %s/_tmp/%s.sql" %(dbuser, dbpassword, dbname, dbtable, ROOT_PATH, fname)
+            fname = fname + ".sql"
+            outfile = os.path.join(TEMP_DIR, fname)
+            cmd = "mysqldump -u%s -p%s %s %s > %s" %(dbuser, dbpassword, dbname, dbtable, outfile)
             print cmd
             out = commands.getstatusoutput(cmd)
             return fname
@@ -438,14 +441,40 @@ class CSVTool():
         
         if dbtype == 'mysql':
             
-            cmd = "mysqldump -u%s -p%s %s < %s/var/%s.sql" %(dbuser, dbpassword, dbname, ROOT_PATH, fname)
+            infile = os.path.join(TEMP_DIR,fname)
+            cmd = "mysqldump -u%s -p%s %s < %s" %(dbuser, dbpassword, dbname, infile)
             print cmd
             out = commands.getstatusoutput(cmd)
             
         else:
             raise Exception("%s is not a supported database type." %dbtype)
     
-            
+    def revert(self, fname):
+        # Check time 
+        now = dt.datetime.now()
+        delta = now - self._fname2dt(fname)
+        
+        if delta.seconds < REVERT_DT:
+            self._load_table(fname)
+        else:
+            return {'error':"File was older than the allowed revert time limit."}
+          
+    def _fname2dt(self, fname):
+        
+        base, ext = fname.split(".")
+        app, model, date_string, time_string = base.split("_")
+             
+        return dt.datetime(int(date_string[0:4]), 
+                           int(date_string[4:6]),
+                           int(date_string[6:8]),
+                           int(time_string[0:2]),
+                           int(time_string[2:4]),
+                           int(time_string[4:6])
+                           )
+        
+        
+        
+      
     def _make_csv_response(self, fields, body, fname=None):
         """
         Returns an HttpResponse object filled with the content
