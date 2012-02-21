@@ -36,34 +36,57 @@ class CSVTool():
         self._get_options()
         self._get_form()
         self._get_fields()
+        self._get_expected()
         self._get_docs()
         self._get_lookup_codes()
         self._get_foreign_keys()
         
     
-    def validate_csv(self, csv):
+    def qs2response(self, qs):
+        """
+        Writes a query set in CSV format based on the input queryset, qs.
+        Returns an HttpReponse object containing the csv file.
+        """
+        
+        fields = [f['name'] for f in self.fields]
+        #fields.pop("entered")
+        #fields.pop("modified")
+        
+        verbose = fields
+        body = []
+       
+        body = ([q.__getattribute__(f) for f in fields] for q in qs)
+        out = self._make_csv_response(fields, body)
+        
+        return out 
+    
+    def validate_csv(self, csv, duplicate_entry = None):
         """
         Validates the given csv (a file-like object) against the form and 
         returns ['errors'] and ['is_valid']
         
         """
+        if not duplicate_entry:
+            duplicate_entry = self.options['duplicate_entry']
+            
         pkg = {
             'errors': [],
             'is_valid': False,
         }
         
         csv = csv_mod.DictReader(csv)
+           
         if not self._validate_headers(csv.fieldnames, pkg):
             return pkg
-        
+                
         row = csv.next()
         row_num=1
         while row:
             row_num +=1
-            self._validate_row(row, pkg, row_num)
+            row = self._convert_fk_names(row)
+            self._validate_row(row, duplicate_entry, pkg, row_num)
             try:
-                row = csv.next()
-                
+                row = csv.next()  
             except StopIteration:
                 row = False
         
@@ -71,7 +94,8 @@ class CSVTool():
             
         return pkg
     
-    def save_csv(csv, duplicate_entry = None):
+    
+    def save_csv(self, csv, duplicate_entry = None):
         
         """ 
         Takes a CSV file and saves it to the database. 
@@ -86,52 +110,75 @@ class CSVTool():
            the existing entry
             
         If duplicate_entry is not entered, use the model default.
-        """
         
-        if not duplicate_entry:
-            duplicate_entry = this.options['duplicate_entry']
+        Returns a dict with keys
+            'row_num':row_num, 
+            'msg':rs,
+            'created':created,
+            'overwritten':overwritten,
+            'ignored':ignored
+            
+        """
                 
+        if not duplicate_entry:
+            duplicate_entry = self.options['duplicate_entry']
+        
+        backup_file = self._dump_table()
+                        
         csv = csv_mod.DictReader(csv)
         row = csv.next()
         row_num = 1
         count = 0
         created = 0
         overwritten = 0
+        ignored = 0
         rs=[]
         write_type = ''
         while row:
-            
+            row = self._convert_fk_names(row)
             try:
                 row_id = int(row['id'])
-            except ValueError:
+            except KeyError:
                 row_id = None
-                    
+            
             if row_id:
                 
-                obj = self.model.objects.get_or_none(pk=int(row['id']))
+                try:
+                    obj = self.model.objects.get(pk=int(row['id']))
+                except self.model.DoesNotExist:
+                    obj = None
+                    
                 if not obj:
+                    
                     write_type="Create: Had id = %s and record did not exist" %int(row['id'])
-                    instance = form(row).save()
+                    instance = self.form(row).save()
                     instance.id=int(row['id'])
                     instance.save()
                     created += 1
                     
-                else:
+                elif not duplicate_entry == "ignore" :
+                    
                     write_type="Overwrite: Had id = %s and record existed" %int(row['id'])
                     if duplicate_entry == "overwrite":
-                        instance = form(row, instance=obj).save()
+                        instance = self.form(row, instance=obj).save()
                         overwritten += 1
+                    
                     elif duplicate_entry == "add":
                         row.pop("id")
-                        instance = form(row).save()
-                        created += 1
-                    else:
-                        ignored += 1 
-            else:
-                instance = form(row).save()
-                created += 1
+                        form = self.form(row)
+                        if form.is_valid():
+                            form.save()
+                            created += 1
+                        else:
+                            raise Exception(form.errors)
+                else:
+                    write_type="Overwrite: Had id = %s and record existed" %int(row['id'])
+                    ignored += 1
+                    instance = obj 
             
-            rs.append({'id':instance.id, 'write_type':write_type})
+            else:
+                instance = self.form(row).save()
+                created += 1
             try:
                 row = csv.next()    
             except StopIteration:
@@ -144,47 +191,55 @@ class CSVTool():
                 'msg':rs,
                 'created':created,
                 'overwritten':overwritten,
-                'ignored':ignored
+                'ignored':ignored,
+                'backup_file':backup_file,
                 }
     
-    def qs2response(self, qs):
-        """
-        Writes a query set in CSV format based on the input queryset, qs.
-        Returns an HttpReponse object containing the csv file.
-        """
-        
-        fields = [f['name'] for f in self.fields]
-        verbose = fields
-        body = []
-        
-        #for q in qs:
-        #    row = []
-        #    for f in fields:
-        #        row.append(q.__getattribute__(f))
-        #    body.append(row)
-        
-        body = ([q.__getattribute__(f) for f in fields] for q in qs)
-        out = self._make_csv_response(fields, body)
-        
-        return out                
+                  
     
-   
+    def _convert_fk_names(self, row):
+        """
+        Loops through a given row and converts it foreign key names to attribute names
+            
+        """
+        out = {}
+        for name in row:
+            if not row[name] and self.is_null(name): 
+                row[name] = None
+            tmp = name.split("_id")
+            if len(tmp) > 1:
+                out.update({tmp[0]:row[name]})
+                
+            else:
+                out.update({name:row[name]})
+            
+        return out
+                
+    def is_null(self, name):
+        for field in self.model._meta.fields:
+            if field.null and field.attname == name:
+                return True  
     
     def _validate_headers(self, headers, pkg):
         """
-        Validates the given headers against the form field names
+        Validates the given headers against the form field attnames. Use this when the file
+        is uploaed. The headers will change in convert_fks()
         
         """
         
         # Track headers
-        expected = [field['name'] for field in self.fields if field['not_blank'] and field['not_null'] ]
-        if not set(headers) >= set(expected):
+        
+        if len(headers) == 1 and 'id' not in headers:
+            pkg['errors'].append("<strong>%s</strong> is not a valid header.<br /> Did the CSV file get exported correctly?" %headers)
+            return False
+            
+        if not set(headers) >= set(self.expected):
             pkg['errors'].append('headers: <br />%s<br /> did not match expected headers of <br />%s<br />' % (headers, expected))
             return False
         else:
             return True
     
-    def _validate_row(self, row, pkg, row_num):
+    def _validate_row(self, row, duplicate_entry, pkg, row_num):
         """
         Takes the headers, a row, and a the form and validates the row 
         against the form using the headers
@@ -192,12 +247,62 @@ class CSVTool():
         """
         
         form = self.form(row)
+            
+        try:
+            row_id = int(row['id'])
+        except KeyError:
+            row_id = None
+        except TypeError:
+            row_id = None
+        
+        if row_id:
+            
+            try:
+                obj = self.model.objects.get(pk=int(row['id']))
+            except self.model.DoesNotExist:
+                obj = None
+                
+            if not obj:
+                
+                write_type="Create: Had id = %s and record did not exist" %int(row['id'])
+                
+                if not form.is_valid():
+                    pkg['errors'].append({'row':row_num, 'msg':form.errors})
+                    return False        
+                
+            elif not duplicate_entry == "ignore" :
+                if duplicate_entry == "overwrite":
+                    form = self.form(row, instance = obj)
+                    is_valid = form.is_valid()
+                    if not form.is_valid():
+                        pkg['errors'].append({'row':row_num, 'msg':form.errors})
+                        return False
+                    
+                elif duplicate_entry == "add":
+                    row.pop("id")                
+                    form = self.form(row)
+                    
+                    if not form.is_valid(): 
+                        pkg['errors'].append({'row':row_num, 'msg':form.errors})
+                        return False
+            else:
+                write_type="Overwrite: Had id = %s and record existed" %int(row['id'])
+                instance = obj 
+        
+        else:
+            if not form.is_valid():
+                pkg['errors'].append({'row':row_num, 'msg':form.errors})
+                return False
+         
+        """        
         if form.is_valid():
             return True
         else:
             pkg['errors'].append({'row':row_num, 'msg':form.errors})
             return False
-    
+        """
+        
+        
     def _get_model(self, app_model):
         if not app_model in self.MODELS:
             raise NameError("%s is not support." %app_model)
@@ -213,7 +318,7 @@ class CSVTool():
             related_model = ''
                         
             if field.__class__.__name__ == 'ForeignKey':
-                related_model = field.related.model.__name__            
+                related_model = field.rel.to.__name__            
             
             out = {'name':field.attname,
                    'db_type':field.db_type(),
@@ -225,7 +330,8 @@ class CSVTool():
                    }
             
             self.fields.append(out)
-            
+    def _get_expected(self):
+        self.expected = [field['name'] for field in self.fields if field['not_blank'] and field['not_null'] ]  
     
     def _get_docs(self):
         self.table_doc = self.model.__doc__
@@ -274,7 +380,7 @@ class CSVTool():
         fks = {}
         for field in self.model._meta.fields:
             if field.__class__.__name__ == 'ForeignKey':
-                fks.update({field.name:field.related.model.__name__})
+                fks.update({field.name:field.rel.to.__name__})
         self.fks = fks
         return self.fks
         
@@ -310,10 +416,10 @@ class CSVTool():
         
         if dbtype == 'mysql':
             
-            cmd = "mysqldump -u%s -p%s %s %s > %s/var/%s.sql" %(dbuser, dbpassword, dbname, dbtable, ROOT_PATH, fname)
+            cmd = "mysqldump -u%s -p%s %s %s > %s/_tmp/%s.sql" %(dbuser, dbpassword, dbname, dbtable, ROOT_PATH, fname)
             print cmd
             out = commands.getstatusoutput(cmd)
-            
+            return fname
         else:
             raise Exception("%s is not a supported database type." %dbtype)
 
@@ -348,7 +454,6 @@ class CSVTool():
         """
         if not fname:
             fname = self._get_fname()+".csv"
-            
                   
         # Convert from generator to list
         fields = list(fields)
