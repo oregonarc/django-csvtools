@@ -421,7 +421,9 @@ class CSVTool():
             outfile = os.path.join(TEMP_DIR, fname)
             cmd = "mysqldump -u%s -p%s %s %s > %s" %(dbuser, dbpassword, dbname, dbtable, outfile)
             print cmd
-            out = commands.getstatusoutput(cmd)
+            status, output = commands.getstatusoutput(cmd)
+            print "Status: ", status
+            print "Output: ", output
             return fname
         else:
             raise Exception("%s is not a supported database type." %dbtype)
@@ -442,10 +444,11 @@ class CSVTool():
         if dbtype == 'mysql':
             
             infile = os.path.join(TEMP_DIR,fname)
-            cmd = "mysqldump -u%s -p%s %s < %s" %(dbuser, dbpassword, dbname, infile)
+            cmd = "mysql -u%s -p%s %s < %s" %(dbuser, dbpassword, dbname, infile)
             print cmd
-            out = commands.getstatusoutput(cmd)
-            
+            status, output = commands.getstatusoutput(cmd)
+            print "Status: ", status
+            print "Output: ", output
         else:
             raise Exception("%s is not a supported database type." %dbtype)
     
