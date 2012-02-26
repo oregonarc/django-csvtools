@@ -49,19 +49,68 @@ class CSVTool():
         Writes a query set in CSV format based on the input queryset, qs.
         Returns an HttpReponse object containing the csv file.
         """
-        
+        """
         fields = [f['name'] for f in self.fields]
+        parent_key = self.options['parent_key']
+        if parent_key:
+            local_field, parent_field = parent_key.split("__")
+            fields.remove('id')
+            
+        raise Exception(parent_key)
+        
         #fields.pop("entered")
         #fields.pop("modified")
         
         verbose = fields
         body = []
        
-        body = ([q.__getattribute__(f) for f in fields] for q in qs)
+        body = []
+        for q in qs:
+            row = []
+            for f in fields:
+                
+                if parent_key:
+                    obj = q.__getattribute__(local_field)
+                    row.append(obj.__getattribute__(parent_field))
+                else:
+                    row.append(q.__getattribute__(f)) 
+            
+            body.append(row)
+        """
+        
+        fields, body = self.get_fields_body(qs)
+        
         out = self._make_csv_response(fields, body)
         
         return out 
     
+    def get_fields_body(self, qs):
+        fields = [f['name'] for f in self.fields]
+        parent_key = self.options['parent_key']
+        local_field = ''
+        parent_field = ''
+        if parent_key:
+            local_field, parent_field = parent_key.split("__")
+            fields.remove('id')
+        
+        body = []
+        for q in qs:
+            row = []
+            for f in fields:
+                #
+                if local_field+"_id" == f: 
+                    obj = q.__getattribute__(local_field)
+                    row.append(obj.__getattribute__(parent_field))
+                else:
+                    row.append(q.__getattribute__(f)) 
+            
+            body.append(row)
+        
+        if parent_field:
+            index = fields.index(local_field+"_id")
+            fields[index] = parent_field
+        return fields, body 
+                                   
     def validate_csv(self, csv, options = None):
         """
         Validates the given csv (a file-like object) against the form and 
@@ -85,8 +134,7 @@ class CSVTool():
            
         if not self._validate_headers(csv.fieldnames, pkg):
             return pkg
-        
-        
+                
         self.created = 0
         self.overwritten = 0
         self.ignored = 0        
@@ -134,7 +182,7 @@ class CSVTool():
                 
 
         duplicate_entry = self.options['duplicate_entry']
-        primary_key = self.options['primary_key']
+        parent_key = self.options['parent_key']
         
         backup_file = self._dump_table() 
                         
@@ -243,11 +291,11 @@ class CSVTool():
         Inputs
         ------
         * row [DICT] - A file row dict generated from the CSV DictReader() method.
-        * options [DICT] - Options dict with keys duplicate_entry and primary_key. 
+        * options [DICT] - Options dict with keys duplicate_entry and parent_key. 
             Keys
             ====
             * duplicate_entry 
-            * primary_key - Primary key field name to use as the primary key. If not given
+            * parent_key - Primary key field name to use as the primary key. If not given
                           it will defualt to 'id'.
         
         
@@ -257,7 +305,7 @@ class CSVTool():
         
         pk = 'id'
         try: 
-            pk = options['primary_key']
+            pk = options['parent_key']
         except:
             pass
         
@@ -314,7 +362,7 @@ class CSVTool():
             return False
             
         if not set(headers) >= set(self.expected):
-            pkg['errors'].append('headers: <br />%s<br /> did not match expected headers of <br />%s<br />' % (headers, expected))
+            pkg['errors'].append('headers: <br />%s<br /> did not match expected headers of <br />%s<br />' % (headers, self.expected))
             return False
         else:
             return True
@@ -327,19 +375,34 @@ class CSVTool():
         """
         
         #form = self.form(row)
-            
+        pk='id'        
+        parent_key = self.options['parent_key']
+        local_field = ''
+        parent_field = ''
+        if parent_key:
+            local_field, parent_field = parent_key.split("__")
+            pk=parent_field
+        
+                # So if I want 'barcode' as their primary key I need the fishencounter_id.barcode
+        
         try:
-            row_id = int(row['id'])
+            row_id = int(row[pk])
         except KeyError:
             row_id = None
         except TypeError:
             row_id = None
-        
-        
+                
         if row_id:
             
             try:
-                obj = self.model.objects.get(pk=int(row['id']))
+                if parent_key:
+                    # Need to generalize this.
+                    fe = FisheEncounter.objects.get(barcode = row_id) 
+                    obj = self.model.objects.filter(fishencounter = fe)
+                    # If more than one object returned, what then?
+                    
+                else:
+                    obj = self.model.objects.get(pk=int(pk)) 
             except self.model.DoesNotExist:
                 obj = None
                 
@@ -352,31 +415,12 @@ class CSVTool():
             else:               
                 form = self.form(row)
                 form.id = row_id
+                
+                # fishencount_id = fe.id               
+                
                 if not form.is_valid():
                     pkg['errors'].append({'row':row_num, 'msg':form.errors})
                     return False        
-            
-            
-            """    
-            elif not duplicate_entry == "ignore" :
-                if duplicate_entry == "overwrite":
-                    form = self.form(row, instance = obj)
-                    is_valid = form.is_valid()
-                    if not form.is_valid():
-                        pkg['errors'].append({'row':row_num, 'msg':form.errors})
-                        return False
-                    
-                elif duplicate_entry == "add":
-                    row.pop("id")                
-                    form = self.form(row)
-                    
-                    if not form.is_valid(): 
-                        pkg['errors'].append({'row':row_num, 'msg':form.errors})
-                        return False
-            else:
-                write_type="Overwrite: Had id = %s and record existed" %int(row['id'])
-                instance = obj
-            """ 
         
         else:
             if not form.is_valid():
@@ -421,7 +465,18 @@ class CSVTool():
             self.fields.append(out)
     def _get_expected(self):
         self.expected = [field['name'] for field in self.fields if field['not_blank'] or field['not_null'] ]  
-    
+        
+        if self.options['parent_key']:
+            tmp = self.options['parent_key'].split("__")
+            if not len(tmp) == 2:
+                raise Exception("Invlaid parent_key name: %s" %self.options['parent_key']) 
+            else:
+                self.expected.append(tmp[1])
+                self.expected.remove("id")
+                if tmp[0]+"_id" in self.expected:
+                    self.expected.remove(tmp[0]+"_id")
+                
+                
     def _get_docs(self):
         self.table_doc = self.model.__doc__
         self.general_doc = """
@@ -438,8 +493,8 @@ class CSVTool():
     
     def _get_options(self):
         self.options = self.OPTIONS[self.app_model]
-        if not 'primary_key' in self.options.keys():
-            self.options.update({'primary_key':'id'})
+        if not 'parent_key' in self.options.keys():
+            self.options.update({'parent_key':""})
         
         return self.OPTIONS[self.app_model]
     
