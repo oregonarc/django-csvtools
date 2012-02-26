@@ -62,15 +62,20 @@ class CSVTool():
         
         return out 
     
-    def validate_csv(self, csv, duplicate_entry = None):
+    def validate_csv(self, csv, options = None):
         """
         Validates the given csv (a file-like object) against the form and 
         returns ['errors'] and ['is_valid']
         
         """
-        if not duplicate_entry:
-            duplicate_entry = self.options['duplicate_entry']
-            
+                       
+        if options:
+            for key in self.options:
+                if not key in options.keys():
+                    options.update({key:self.options[key]})
+        
+        self.options = options
+        
         pkg = {
             'errors': [],
             'is_valid': False,
@@ -80,13 +85,18 @@ class CSVTool():
            
         if not self._validate_headers(csv.fieldnames, pkg):
             return pkg
-                
+        
+        
+        self.created = 0
+        self.overwritten = 0
+        self.ignored = 0        
+        
         row = csv.next()
         row_num=1
         while row:
             row_num +=1
             row = self._convert_fk_names(row)
-            self._validate_row(row, duplicate_entry, pkg, row_num)
+            self._validate_row(row, options, pkg, row_num)
             try:
                 row = csv.next()  
             except StopIteration:
@@ -97,7 +107,7 @@ class CSVTool():
         return pkg
     
     
-    def save_csv(self, csv, duplicate_entry = None):
+    def save_csv(self, csv):
         
         """ 
         Takes a CSV file and saves it to the database. 
@@ -122,8 +132,9 @@ class CSVTool():
             
         """
                 
-        if not duplicate_entry:
-            duplicate_entry = self.options['duplicate_entry']
+
+        duplicate_entry = self.options['duplicate_entry']
+        primary_key = self.options['primary_key']
         
         backup_file = self._dump_table() 
                         
@@ -131,9 +142,9 @@ class CSVTool():
         row = csv.next()
         row_num = 1
         count = 0
-        created = 0
-        overwritten = 0
-        ignored = 0
+        self.created = 0
+        self.overwritten = 0
+        self.ignored = 0
         rs=[]
         write_type = ''
         while row:
@@ -150,20 +161,25 @@ class CSVTool():
                 except self.model.DoesNotExist:
                     obj = None
                     
-                if not obj:
-                    
-                    write_type="Create: Had id = %s and record did not exist" %int(row['id'])
-                    instance = self.form(row).save()
+                if obj:
+                    form = self._get_existing_form(row, obj, self.options)
+                    if form:
+                        form.save()
+                        
+                else:    
+                    form = self.form(row)
                     instance.id=int(row['id'])
                     instance.save()
-                    created += 1
+                    self.created += 1
                     
+                
+                """
                 elif not duplicate_entry == "ignore" :
                     
                     write_type="Overwrite: Had id = %s and record existed" %int(row['id'])
                     if duplicate_entry == "overwrite":
                         instance = self.form(row, instance=obj).save()
-                        overwritten += 1
+                        self.overwritten += 1
                     
                     elif duplicate_entry == "add":
                         row.pop("id")
@@ -175,12 +191,14 @@ class CSVTool():
                             raise Exception(form.errors)
                 else:
                     write_type="Overwrite: Had id = %s and record existed" %int(row['id'])
-                    ignored += 1
-                    instance = obj 
+                    self.ignored += 1
+                    instance = obj
+                """ 
             
             else:
+                # Does not have row_id so just created the entry
                 instance = self.form(row).save()
-                created += 1
+                self.created += 1
             try:
                 row = csv.next()    
             except StopIteration:
@@ -191,14 +209,74 @@ class CSVTool():
         
         return {'row_num':row_num, 
                 'msg':rs,
-                'created':created,
-                'overwritten':overwritten,
-                'ignored':ignored,
+                'created':self.created,
+                'overwritten':self.overwritten,
+                'ignored':self.ignored,
                 'backup_file':backup_file,
                 }
     
-                  
+    def revert(self, fname):
+        """
+        Load the SQL dump file gernerated while saving a CSV but only if the
+        filename's time stamp is less than REVERT_DT seconds old. 
+        
+        Inputs
+        ------ 
+        fname [STRING] - the filename to be loaded. This filename was gernated by
+                         _dumpt_table() and contains the dump stimestamp.
+        """ 
+        
+        now = dt.datetime.now()
+        delta = now - self._fname2dt(fname)
+        
+        if delta.seconds < REVERT_DT:
+            self._load_table(fname)
+            return {}
+        else:
+            return {'error':"File was older than the allowed revert time limit."}           
     
+    
+    def _get_existing_form(self, row, obj,  options):
+        """
+        Returns an bound form based on the row data and options dict.    
+        
+        Inputs
+        ------
+        * row [DICT] - A file row dict generated from the CSV DictReader() method.
+        * options [DICT] - Options dict with keys duplicate_entry and primary_key. 
+            Keys
+            ====
+            * duplicate_entry 
+            * primary_key - Primary key field name to use as the primary key. If not given
+                          it will defualt to 'id'.
+        
+        
+        """
+        
+        de = options['duplicate_entry']
+        
+        pk = 'id'
+        try: 
+            pk = options['primary_key']
+        except:
+            pass
+        
+        if de == 'overwrite':
+            form = self.form(row, instance=obj)
+            self.overwritten += 1
+        
+        elif de == 'add':
+            row.pop("id")
+            form = self.form(row)
+            self.created += 1
+        
+        elif de == 'ignore':
+            form = None
+            self.ignored += 1
+        
+        return form
+    
+        
     def _convert_fk_names(self, row):
         """
         Loops through a given row and converts it foreign key names to attribute names
@@ -241,14 +319,14 @@ class CSVTool():
         else:
             return True
     
-    def _validate_row(self, row, duplicate_entry, pkg, row_num):
+    def _validate_row(self, row, options, pkg, row_num):
         """
         Takes the headers, a row, and a the form and validates the row 
         against the form using the headers
         
         """
         
-        form = self.form(row)
+        #form = self.form(row)
             
         try:
             row_id = int(row['id'])
@@ -257,6 +335,7 @@ class CSVTool():
         except TypeError:
             row_id = None
         
+        
         if row_id:
             
             try:
@@ -264,14 +343,21 @@ class CSVTool():
             except self.model.DoesNotExist:
                 obj = None
                 
-            if not obj:
-                
-                write_type="Create: Had id = %s and record did not exist" %int(row['id'])
-                
+            if obj:
+                form =self._get_existing_form(row, obj, options)
+                if form:
+                    if not form.is_valid():
+                        pkg['errors'].append({'row':row_num, 'msg':form.errors})
+                        return False 
+            else:               
+                form = self.form(row)
+                form.id = row_id
                 if not form.is_valid():
                     pkg['errors'].append({'row':row_num, 'msg':form.errors})
                     return False        
-                
+            
+            
+            """    
             elif not duplicate_entry == "ignore" :
                 if duplicate_entry == "overwrite":
                     form = self.form(row, instance = obj)
@@ -289,7 +375,8 @@ class CSVTool():
                         return False
             else:
                 write_type="Overwrite: Had id = %s and record existed" %int(row['id'])
-                instance = obj 
+                instance = obj
+            """ 
         
         else:
             if not form.is_valid():
@@ -333,7 +420,7 @@ class CSVTool():
             
             self.fields.append(out)
     def _get_expected(self):
-        self.expected = [field['name'] for field in self.fields if field['not_blank'] and field['not_null'] ]  
+        self.expected = [field['name'] for field in self.fields if field['not_blank'] or field['not_null'] ]  
     
     def _get_docs(self):
         self.table_doc = self.model.__doc__
@@ -351,7 +438,12 @@ class CSVTool():
     
     def _get_options(self):
         self.options = self.OPTIONS[self.app_model]
+        if not 'primary_key' in self.options.keys():
+            self.options.update({'primary_key':'id'})
+        
         return self.OPTIONS[self.app_model]
+    
+    
         
     def _get_form(self):
         """
@@ -375,6 +467,12 @@ class CSVTool():
         for field in self.model._meta.fields:
             if field.choices:
                 lookups.update({field.name:field.choices})
+                
+            # Ad if field.foreign_key then and there
+            # are less than FK_LOOKUP_MAX entries in the related models
+            # make a choices list
+            # and return it like is was a choice field.
+                
         self.lookup_codes = lookups
         return self.lookup_codes    
     
@@ -452,15 +550,7 @@ class CSVTool():
         else:
             raise Exception("%s is not a supported database type." %dbtype)
     
-    def revert(self, fname):
-        # Check time 
-        now = dt.datetime.now()
-        delta = now - self._fname2dt(fname)
-        
-        if delta.seconds < REVERT_DT:
-            self._load_table(fname)
-        else:
-            return {'error':"File was older than the allowed revert time limit."}
+    
           
     def _fname2dt(self, fname):
         
