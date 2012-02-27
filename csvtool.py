@@ -10,6 +10,7 @@ Comma Seperated Values format.
 import os
 import datetime as dt
 import csv as csv_mod
+import codecs
 
 from django.forms import ModelForm
 from django.http import HttpResponse
@@ -114,7 +115,7 @@ class CSVTool():
             fields[index] = parent_field
         return fields, body 
                                    
-    def validate_csv(self, csv, options = None):
+    def validate_csv(self, file, options = None):
         """
         Validates the given csv (a file-like object) against the form and 
         returns ['errors'] and ['is_valid']
@@ -133,9 +134,16 @@ class CSVTool():
             'is_valid': False,
         }
         
-        csv = csv_mod.DictReader(csv)
+        dialect = csv_mod.Sniffer().sniff(codecs.EncodedFile(file,"utf-8").read(1024))
+        file.open() # seek to 0
+        #self.reader = csv.reader(codecs.EncodedFile(file,"utf-8"),
+        #                         dialect=dialect)
+        
+        csv = csv_mod.DictReader( codecs.EncodedFile(file,"utf-8"), dialect=dialect )
+        
         try:
             fieldnames = csv.fieldnames
+       
         except:
             pkg['errors'].append("Could not read headers. Please check your file to make sure it has headers in the correct format.")
             pkg['is_valid'] = False
@@ -392,6 +400,8 @@ class CSVTool():
             row_id = None
                 
         if row_id:
+            obj, parent_id = self._get_obj_or_none( row_id )
+            """
             try:
                 obj, parent_id = self._get_obj_or_none( row_id )
             except:
@@ -400,7 +410,7 @@ class CSVTool():
                                             }
                                       })
                 return False
-                     
+            """         
             if obj:
                 if self.parent_key:
                     row.pop(pk)
@@ -454,7 +464,7 @@ class CSVTool():
         else:
             parent_id = None
             try:
-                obj = self.model.objects.get(pk=int(pk)) 
+                obj = self.model.objects.get(pk=row_id) 
             except self.model.DoesNotExist:
                 obj = None
         return obj, parent_id
