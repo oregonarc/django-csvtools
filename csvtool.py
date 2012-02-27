@@ -15,6 +15,9 @@ from django.forms import ModelForm
 from django.http import HttpResponse
 
 from fish.settings import CSVTOOL_MODELS, DATABASES, ROOT_PATH, TEMP_DIR
+from fish.wcgsi.models import FishEncounter
+
+
 
 REVERT_DT = 1*60*60  # Time in secs 
 
@@ -182,8 +185,8 @@ class CSVTool():
                 
 
         duplicate_entry = self.options['duplicate_entry']
-        parent_key = self.options['parent_key']
-        
+        pk = self.parent_field or 'id'
+           
         backup_file = self._dump_table() 
                         
         csv = csv_mod.DictReader(csv)
@@ -198,51 +201,42 @@ class CSVTool():
         while row:
             row = self._convert_fk_names(row)
             try:
-                row_id = int(row['id'])
+                row_id = row[self.parent_field]
             except KeyError:
                 row_id = None
             
+            
             if row_id:
+                obj, parent_id = self._get_obj_or_none( row_id )
                 
+                """
                 try:
                     obj = self.model.objects.get(pk=int(row['id']))
                 except self.model.DoesNotExist:
                     obj = None
-                    
+                """    
                 if obj:
-                    form = self._get_existing_form(row, obj, self.options)
+                    if self.parent_key:
+                        row.pop(pk)
+                        row.update( {self.local_field+"_id":parent_id })
+                                        
+                    form = self._get_existing_form(row, obj)                    
                     if form:
-                        form.save()
-                        
+                        instance = form.save()
+                        if self.parent_key:
+                            fe = FishEncounter.objects.get(pk=parent_id)
+                            instance.fishencounter = fe
+                            instance.save()
+                            
                 else:    
                     form = self.form(row)
-                    instance.id=int(row['id'])
-                    instance.save()
+                    form.__setattr__(pk, row_id)
+                    form.save()
+                    #form = self.form(row)
+                    #instance.id=int(row['id'])
+                    #instance.save()
                     self.created += 1
                     
-                
-                """
-                elif not duplicate_entry == "ignore" :
-                    
-                    write_type="Overwrite: Had id = %s and record existed" %int(row['id'])
-                    if duplicate_entry == "overwrite":
-                        instance = self.form(row, instance=obj).save()
-                        self.overwritten += 1
-                    
-                    elif duplicate_entry == "add":
-                        row.pop("id")
-                        form = self.form(row)
-                        if form.is_valid():
-                            form.save()
-                            created += 1
-                        else:
-                            raise Exception(form.errors)
-                else:
-                    write_type="Overwrite: Had id = %s and record existed" %int(row['id'])
-                    self.ignored += 1
-                    instance = obj
-                """ 
-            
             else:
                 # Does not have row_id so just created the entry
                 instance = self.form(row).save()
@@ -284,7 +278,7 @@ class CSVTool():
             return {'error':"File was older than the allowed revert time limit."}           
     
     
-    def _get_existing_form(self, row, obj,  options):
+    def _get_existing_form(self, row, obj):
         """
         Returns an bound form based on the row data and options dict.    
         
@@ -301,20 +295,13 @@ class CSVTool():
         
         """
         
-        de = options['duplicate_entry']
-        
-        pk = 'id'
-        try: 
-            pk = options['parent_key']
-        except:
-            pass
+        de = self.options['duplicate_entry']
         
         if de == 'overwrite':
             form = self.form(row, instance=obj)
             self.overwritten += 1
         
         elif de == 'add':
-            row.pop("id")
             form = self.form(row)
             self.created += 1
         
@@ -376,46 +363,45 @@ class CSVTool():
         
         #form = self.form(row)
         pk='id'        
-        parent_key = self.options['parent_key']
-        local_field = ''
-        parent_field = ''
-        if parent_key:
-            local_field, parent_field = parent_key.split("__")
-            pk=parent_field
-        
+        self.parent_key = self.options['parent_key']
+        self.local_field = ''
+        self.parent_field = ''
+        if self.parent_key:
+            self.local_field, self.parent_field = self.parent_key.split("__")
+            pk=self.parent_field
+            
                 # So if I want 'barcode' as their primary key I need the fishencounter_id.barcode
         
         try:
-            row_id = int(row[pk])
+            row_id = row[pk]
         except KeyError:
             row_id = None
         except TypeError:
             row_id = None
                 
         if row_id:
-            
-            try:
-                if parent_key:
-                    # Need to generalize this.
-                    fe = FisheEncounter.objects.get(barcode = row_id) 
-                    obj = self.model.objects.filter(fishencounter = fe)
-                    # If more than one object returned, what then?
-                    
-                else:
-                    obj = self.model.objects.get(pk=int(pk)) 
-            except self.model.DoesNotExist:
-                obj = None
-                
+            obj, parent_id = self._get_obj_or_none( row_id )
+            """
+            except:
+                pkg['errors'].append({'row':row_num, 
+                                      'msg':{self.parent_field:["More than one entry with %s = %s. Cannot overwrite all of them" %(self.parent_field, row_id)]
+                                            }
+                                      })
+                return False
+            """          
             if obj:
-                form =self._get_existing_form(row, obj, options)
+                if self.parent_key:
+                    row.pop(pk)
+                    row.update( {self.local_field+"_id":parent_id })                
+                
+                form =self._get_existing_form(row, obj)
                 if form:
                     if not form.is_valid():
                         pkg['errors'].append({'row':row_num, 'msg':form.errors})
                         return False 
             else:               
                 form = self.form(row)
-                form.id = row_id
-                
+                form.__setattr__(pk, row_id)
                 # fishencount_id = fe.id               
                 
                 if not form.is_valid():
@@ -435,6 +421,31 @@ class CSVTool():
             return False
         """
         
+    def _get_obj_or_none(self, row_id):
+        if self.parent_key:
+            # Need to generalize this.
+            fe = FishEncounter.objects.get(barcode = row_id) 
+            parent_id = fe.id
+            obj = self.model.objects.filter(fishencounter = fe)
+            #raise NameError
+            # If more than one object returned, what then?
+            if len(obj) > 1:
+                if self.options['duplicate_entry'] == 'overwrite':
+                    raise Exception("There is more than one %s for with %s = %s" %(self.model, self.local_field, row_id)) 
+                else:
+                    obj = obj[0]
+            elif len(obj) == 1:
+                obj = obj[0]
+            else:
+                obj = None
+            
+        else:
+            parent_id = None
+            try:
+                obj = self.model.objects.get(pk=int(pk)) 
+            except self.model.DoesNotExist:
+                obj = None
+        return obj, parent_id
         
     def _get_model(self, app_model):
         if not app_model in self.MODELS:
