@@ -134,15 +134,27 @@ class CSVTool():
         }
         
         csv = csv_mod.DictReader(csv)
-           
-        if not self._validate_headers(csv.fieldnames, pkg):
+        try:
+            fieldnames = csv.fieldnames
+        except:
+            pkg['errors'].append("Could not read headers. Please check your file to make sure it has headers in the correct format.")
+            pkg['is_valid'] = False
+            return pkg
+        
+        if not self._validate_headers(fieldnames, pkg):
             return pkg
                 
         self.created = 0
         self.overwritten = 0
         self.ignored = 0        
         
-        row = csv.next()
+        try:
+            row = csv.next()
+        except StopIteration:
+            pkg['errors'].append("No rows found. Please check your file and verify it has data in the proper format.")
+            pkg['is_valid'] = False
+            return pkg
+        
         row_num=1
         while row:
             row_num +=1
