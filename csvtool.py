@@ -380,15 +380,15 @@ class CSVTool():
             row_id = None
                 
         if row_id:
-            obj, parent_id = self._get_obj_or_none( row_id )
-            """
+            try:
+                obj, parent_id = self._get_obj_or_none( row_id )
             except:
                 pkg['errors'].append({'row':row_num, 
                                       'msg':{self.parent_field:["More than one entry with %s = %s. Cannot overwrite all of them" %(self.parent_field, row_id)]
                                             }
                                       })
                 return False
-            """          
+                     
             if obj:
                 if self.parent_key:
                     row.pop(pk)
@@ -431,7 +431,7 @@ class CSVTool():
             # If more than one object returned, what then?
             if len(obj) > 1:
                 if self.options['duplicate_entry'] == 'overwrite':
-                    raise Exception("There is more than one %s for with %s = %s" %(self.model, self.local_field, row_id)) 
+                    raise Exception("Multiple records found. Cannot overwrite all of them.") 
                 else:
                     obj = obj[0]
             elif len(obj) == 1:
