@@ -224,13 +224,13 @@ class CSVTool():
         while row:
             row = self._convert_fk_names(row)
             try:
-                row_id = row[self.parent_field]
+                row_id = row[pk]
             except KeyError:
                 row_id = None
             
-            
             if row_id:
                 obj, parent_id = self._get_obj_or_none( row_id )
+                
                 
                 """
                 try:
