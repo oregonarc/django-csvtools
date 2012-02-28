@@ -135,10 +135,7 @@ class CSVTool():
         }
         
         dialect = csv_mod.Sniffer().sniff(codecs.EncodedFile(file,"utf-8").read(1024))
-        file.open() # seek to 0
-        #self.reader = csv.reader(codecs.EncodedFile(file,"utf-8"),
-        #                         dialect=dialect)
-        
+        file.open() 
         csv = csv_mod.DictReader( codecs.EncodedFile(file,"utf-8"), dialect=dialect )
         
         try:
@@ -178,7 +175,7 @@ class CSVTool():
         return pkg
     
     
-    def save_csv(self, csv):
+    def save_csv(self, file):
         
         """ 
         Takes a CSV file and saves it to the database. 
@@ -208,8 +205,14 @@ class CSVTool():
         pk = self.parent_field or 'id'
            
         backup_file = self._dump_table() 
-                        
-        csv = csv_mod.DictReader(csv)
+        
+        # Reset the file position and read it again.
+        file.seek(0)             
+        dialect = csv_mod.Sniffer().sniff(codecs.EncodedFile(file,"utf-8").read(1024))
+        file.seek(0) 
+        csv = csv_mod.DictReader( codecs.EncodedFile(file,"utf-8"), dialect=dialect )
+                
+        #csv = csv_mod.DictReader(csv)
         row = csv.next()
         row_num = 1
         count = 0
@@ -400,8 +403,8 @@ class CSVTool():
             row_id = None
                 
         if row_id:
-            obj, parent_id = self._get_obj_or_none( row_id )
-            """
+            #obj, parent_id = self._get_obj_or_none( row_id )
+            
             try:
                 obj, parent_id = self._get_obj_or_none( row_id )
             except:
@@ -410,7 +413,7 @@ class CSVTool():
                                             }
                                       })
                 return False
-            """         
+                     
             if obj:
                 if self.parent_key:
                     row.pop(pk)
@@ -493,6 +496,7 @@ class CSVTool():
                    'help_text':field.help_text,
                    'not_blank':not field.blank,
                    'not_null':not field.null,
+                   'unique':field.unique,
                    }
             
             self.fields.append(out)
