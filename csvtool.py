@@ -134,7 +134,7 @@ class CSVTool():
             'is_valid': False,
         }
         
-        dialect = csv_mod.Sniffer().sniff(codecs.EncodedFile(file,"utf-8").read(1024))
+        dialect = csv_mod.Sniffer().sniff(codecs.EncodedFile(file,"utf-8").read(2048))
         file.open() 
         csv = csv_mod.DictReader( codecs.EncodedFile(file,"utf-8"), dialect=dialect )
         
@@ -198,8 +198,7 @@ class CSVTool():
             'overwritten':overwritten,
             'ignored':ignored
             
-        """
-                
+        """      
 
         duplicate_entry = self.options['duplicate_entry']
         pk = self.parent_field or 'id'
@@ -208,7 +207,7 @@ class CSVTool():
         
         # Reset the file position and read it again.
         file.seek(0)             
-        dialect = csv_mod.Sniffer().sniff(codecs.EncodedFile(file,"utf-8").read(1024))
+        dialect = csv_mod.Sniffer().sniff(codecs.EncodedFile(file,"utf-8").read(2048))
         file.seek(0) 
         csv = csv_mod.DictReader( codecs.EncodedFile(file,"utf-8"), dialect=dialect )
                 
@@ -434,6 +433,7 @@ class CSVTool():
                     return False        
         
         else:
+            form = self.form(row)
             if not form.is_valid():
                 pkg['errors'].append({'row':row_num, 'msg':form.errors})
                 return False
