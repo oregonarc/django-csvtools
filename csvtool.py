@@ -19,7 +19,6 @@ from fish.settings import CSVTOOL_MODELS, DATABASES, ROOT_PATH, TEMP_DIR
 from fish.wcgsi.models import FishEncounter
 
 
-
 REVERT_DT = 1*60*60  # Time in secs 
 
 class CSVTool():
@@ -336,7 +335,8 @@ class CSVTool():
         
     def _convert_fk_names(self, row):
         """
-        Loops through a given row and converts it foreign key names to attribute names
+        Loops through a given row and converts it foreign key names to attribute names.
+        Also converts blank entries to null. 
             
         """
         out = {}
@@ -353,6 +353,9 @@ class CSVTool():
         return out
                 
     def is_null(self, name):
+        """
+            Returns True is a field can be null.
+        """
         for field in self.model._meta.fields:
             if field.null and field.attname == name:
                 return True  
@@ -384,7 +387,8 @@ class CSVTool():
         """
         
         #form = self.form(row)
-        pk='id'        
+        pk='id'
+        row_id = None        
         self.parent_key = self.options['parent_key']
         self.local_field = ''
         self.parent_field = ''
@@ -402,8 +406,18 @@ class CSVTool():
             row_id = None
                 
         if row_id:
-            #obj, parent_id = self._get_obj_or_none( row_id )
-            
+            if pk == 'id':
+                try:
+                    int(row_id)
+                except ValueError:
+                    pkg['errors'].append({'row':row_num, 
+                                          'msg':{self.parent_field:["Invlaid 'id': %s. 'id' must be an integer" %(row_id)]
+                                                }
+                                          })
+                    return False
+                        
+            obj, parent_id = self._get_obj_or_none( row_id )
+                        
             try:
                 obj, parent_id = self._get_obj_or_none( row_id )
             except:
@@ -466,8 +480,9 @@ class CSVTool():
             
         else:
             parent_id = None
+                        
             try:
-                obj = self.model.objects.get(pk=row_id) 
+                obj = self.model.objects.get(pk=row_id)            
             except self.model.DoesNotExist:
                 obj = None
         return obj, parent_id
