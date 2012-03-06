@@ -21,6 +21,25 @@ from fish.wcgsi.models import FishEncounter
 
 REVERT_DT = 1*60*60  # Time in secs 
 
+
+class MultipleEntriesFound(Exception):
+    def __inti__(self, value):
+        self.value = value
+    def __str__(self):
+        return repr(self.value)
+
+class ParentNotFound(Exception):
+    def __inti__(self, value):
+        self.value = value
+    def __str__(self):
+        return repr(self.value)
+
+class InvalidForeignKeyValue():
+    def __inti__(self, value):
+        self.value = value
+    def __str__(self):
+        return repr(self.value)
+
 class CSVTool():
     
     project_name = 'fish'
@@ -133,7 +152,16 @@ class CSVTool():
             'is_valid': False,
         }
         
-        dialect = csv_mod.Sniffer().sniff(codecs.EncodedFile(file,"utf-8").read(2048))
+        head = codecs.EncodedFile(file,"utf-8").read(2048)
+        try:
+            dialect = csv_mod.Sniffer().sniff(head)
+        except:
+            pkg['errors'].append("""  Could not read file. Is it empty? Are you using 
+                                    commas as delimiters? Please check your file
+                                     to make sure it has the correct format. <br />File preview: %s""" %head)
+            pkg['is_valid'] = False
+            return pkg
+        
         file.open() 
         csv = csv_mod.DictReader( codecs.EncodedFile(file,"utf-8"), dialect=dialect )
         
@@ -148,7 +176,7 @@ class CSVTool():
         if not self._validate_headers(fieldnames, pkg):
             return pkg
                 
-        self.created = 0
+        self.created = []
         self.overwritten = 0
         self.ignored = 0        
         
@@ -162,7 +190,10 @@ class CSVTool():
         row_num=1
         while row:
             row_num +=1
+            
             row = self._convert_fk_names(row)
+                           
+                
             self._validate_row(row, options, pkg, row_num)
             try:
                 row = csv.next()  
@@ -214,7 +245,7 @@ class CSVTool():
         row = csv.next()
         row_num = 1
         count = 0
-        self.created = 0
+        self.created = []
         self.overwritten = 0
         self.ignored = 0
         rs=[]
@@ -227,15 +258,12 @@ class CSVTool():
                 row_id = None
             
             if row_id:
-                obj, parent_id = self._get_obj_or_none( row_id )
                 
-                
-                """
                 try:
-                    obj = self.model.objects.get(pk=int(row['id']))
-                except self.model.DoesNotExist:
-                    obj = None
-                """    
+                    obj, parent_id = self._get_obj_or_none( row_id )
+                except:
+                    raise Exception("More than one entry found. Cannot overwrite all of them.")
+                    
                 if obj:
                     if self.parent_key:
                         row.pop(pk)
@@ -252,16 +280,16 @@ class CSVTool():
                 else:    
                     form = self.form(row)
                     form.__setattr__(pk, row_id)
-                    form.save()
+                    instance = form.save()
                     #form = self.form(row)
                     #instance.id=int(row['id'])
                     #instance.save()
-                    self.created += 1
+                    self.created.append({'row':row_num,'id':instance.id})
                     
             else:
                 # Does not have row_id so just created the entry
                 instance = self.form(row).save()
-                self.created += 1
+                self.created.append({'row':row_num,'id':instance.id})
             try:
                 row = csv.next()    
             except StopIteration:
@@ -324,7 +352,7 @@ class CSVTool():
         
         elif de == 'add':
             form = self.form(row)
-            self.created += 1
+            
         
         elif de == 'ignore':
             form = None
@@ -337,14 +365,25 @@ class CSVTool():
         """
         Loops through a given row and converts it foreign key names to attribute names.
         Also converts blank entries to null. 
+        Also checks to see if foreign key is an integer. If not sets it to -1 and lets form
+        errors handle it.
             
         """
         out = {}
         for name in row:
+            
+            # If the entry is blank and Nulls are allowed convert blanks to None
             if not row[name] and self.is_null(name): 
                 row[name] = None
+                        
             tmp = name.split("_id")
             if len(tmp) > 1:
+                # check that foreign key is and integer, if not sets it to -1 and lets form validation handle it
+                try:
+                    int(row[name])
+                except:
+                    row[name] = -1
+                                   
                 out.update({tmp[0]:row[name]})
                 
             else:
@@ -363,7 +402,7 @@ class CSVTool():
     def _validate_headers(self, headers, pkg):
         """
         Validates the given headers against the form field attnames. Use this when the file
-        is uploaed. The headers will change in convert_fks()
+        is upload. The headers will change in convert_fks()
         
         """
         
@@ -395,8 +434,6 @@ class CSVTool():
         if self.parent_key:
             self.local_field, self.parent_field = self.parent_key.split("__")
             pk=self.parent_field
-            
-                # So if I want 'barcode' as their primary key I need the fishencounter_id.barcode
         
         try:
             row_id = row[pk]
@@ -416,17 +453,23 @@ class CSVTool():
                                           })
                     return False
                         
-            obj, parent_id = self._get_obj_or_none( row_id )
+            #obj, parent_id = self._get_obj_or_none( row_id )
                         
             try:
                 obj, parent_id = self._get_obj_or_none( row_id )
-            except:
+            except MultipleEntriesFound:
                 pkg['errors'].append({'row':row_num, 
                                       'msg':{self.parent_field:["More than one entry with %s = %s. Cannot overwrite all of them" %(self.parent_field, row_id)]
                                             }
                                       })
                 return False
-                     
+            except ParentNotFound:
+                pkg['errors'].append({'row':row_num, 
+                                     'msg':{self.parent_field:["Cannot find FishEncounter with %s = %s." %(self.parent_field, row_id)]
+                                           }
+                                     })
+                return False
+                 
             if obj:
                 if self.parent_key:
                     row.pop(pk)
@@ -461,16 +504,26 @@ class CSVTool():
         """
         
     def _get_obj_or_none(self, row_id):
+        """
+        Returns an object for the row_id or or a list or none. 
+        Raises an exception is multiple entries are found. 
+        """
         if self.parent_key:
             # Need to generalize this.
-            fe = FishEncounter.objects.get(barcode = row_id) 
+            
+            # if fish encounter does not exist catch exception in _validate_row()
+            try:
+                fe = FishEncounter.objects.get(barcode = row_id)                 
+            except FishEncounter.DoesNotExist:
+                raise ParentNotFound
+                
             parent_id = fe.id
             obj = self.model.objects.filter(fishencounter = fe)
             #raise NameError
             # If more than one object returned, what then?
             if len(obj) > 1:
                 if self.options['duplicate_entry'] == 'overwrite':
-                    raise Exception("Multiple records found. Cannot overwrite all of them.") 
+                    raise MultipleEntriesFound("Multiple records found. Cannot overwrite all of them.") 
                 else:
                     obj = obj[0]
             elif len(obj) == 1:
