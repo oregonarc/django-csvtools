@@ -257,11 +257,12 @@ class CSVTool():
             except KeyError:
                 row_id = None
             
-            if row_id:
+            if row_id:  # if the primary key field is not empty
                 
                 try:
                     obj, parent_id = self._get_obj_or_none( row_id )
                 except:
+                    #This needs to be fixed to catch the case where a parent_obj doesn't exist
                     raise Exception("More than one entry found. Cannot overwrite all of them.")
                     
                 if obj:
@@ -277,18 +278,17 @@ class CSVTool():
                             instance.fishencounter = fe
                             instance.save()
                             
-                else:    
-                    form = self.form(row)
-                    form.__setattr__(pk, row_id)
-                    instance = form.save()
-                    #form = self.form(row)
-                    #instance.id=int(row['id'])
-                    #instance.save()
+                else: # Have row_id but object entry is not in the database.
+                    if parent_id:                          
+                        row.update({"fishencounter":parent_id})
+                    form = self.form(row)  # This is a new database entry, i.e. no id has been set.                    
+                    #form.__setattr__(pk, row_id)
+                    instance = form.save()                    
                     self.created.append({'row':row_num,'id':instance.id})
                     
             else:
                 # Does not have row_id so just created the entry
-                instance = self.form(row).save()
+                instance = self.form(row).save() 
                 self.created.append({'row':row_num,'id':instance.id})
             try:
                 row = csv.next()    
@@ -329,7 +329,7 @@ class CSVTool():
     
     def _get_existing_form(self, row, obj):
         """
-        Returns an bound form based on the row data and options dict.    
+        Returns a bound form based on the row data and options dict.    
         
         Inputs
         ------
@@ -382,8 +382,7 @@ class CSVTool():
                 try:
                     int(row[name])
                 except:
-                    row[name] = -1
-                                   
+                    row[name] = -1                  
                 out.update({tmp[0]:row[name]})
                 
             else:
@@ -503,24 +502,37 @@ class CSVTool():
             return False
         """
         
+    def _get_parent_obj(self, row_id):
+        """
+        Returns the parent object form the FishEncounter with barcode = row_id or none. 
+        Raises an exception is multiple entries are found. 
+        THIS NEEDS TO BE GENERALIZED.
+        
+        """
+        try:
+            fe = FishEncounter.objects.get(barcode = row_id)                 
+        except FishEncounter.DoesNotExist:
+            raise ParentNotFound           
+        return fe    
+    
     def _get_obj_or_none(self, row_id):
         """
-        Returns an object for the row_id or or a list or none. 
+        Returns an object from the FishEncounter table with barcode = row_id or none. 
         Raises an exception is multiple entries are found. 
-        """
+        THIS NEEDS TO BE GENERALIZED.
+        
+        """        
+ 
         if self.parent_key:
             # Need to generalize this.
             
             # if fish encounter does not exist catch exception in _validate_row()
-            try:
-                fe = FishEncounter.objects.get(barcode = row_id)                 
-            except FishEncounter.DoesNotExist:
-                raise ParentNotFound
-                
+            # Get the parent object or raise exception if it does not exist. 
+            fe = self._get_parent_obj(row_id)
             parent_id = fe.id
+            
+            # Look for a local object referring the parent objects 
             obj = self.model.objects.filter(fishencounter = fe)
-            #raise NameError
-            # If more than one object returned, what then?
             if len(obj) > 1:
                 if self.options['duplicate_entry'] == 'overwrite':
                     raise MultipleEntriesFound("Multiple records found. Cannot overwrite all of them.") 
