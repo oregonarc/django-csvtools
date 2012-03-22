@@ -20,7 +20,7 @@ from fish.wcgsi.models import FishEncounter
 
 
 REVERT_DT = 1*60*60  # Time in secs 
-
+FK_LOOKUP_MAX = 20
 
 class MultipleEntriesFound(Exception):
     def __inti__(self, value):
@@ -152,6 +152,7 @@ class CSVTool():
             'is_valid': False,
         }
         
+        ############## Validate file and see if we can read the headers. ###############
         head = codecs.EncodedFile(file,"utf-8").read(2048)
         try:
             dialect = csv_mod.Sniffer().sniff(head)
@@ -161,18 +162,18 @@ class CSVTool():
                                      to make sure it has the correct format. <br />File preview: %s""" %head)
             pkg['is_valid'] = False
             return pkg
+        ##############################################################################
         
         file.open() 
         csv = csv_mod.DictReader( codecs.EncodedFile(file,"utf-8"), dialect=dialect )
         
         try:
             fieldnames = csv.fieldnames
-       
         except:
             pkg['errors'].append("Could not read headers. Please check your file to make sure it has headers in the correct format.")
             pkg['is_valid'] = False
             return pkg
-        
+                      
         if not self._validate_headers(fieldnames, pkg):
             return pkg
                 
@@ -180,12 +181,14 @@ class CSVTool():
         self.overwritten = 0
         self.ignored = 0        
         
+        ################ Try to get the first row of data, if not there return error ############## 
         try:
             row = csv.next()
         except StopIteration:
             pkg['errors'].append("No rows found. Please check your file and verify it has data in the proper format.")
             pkg['is_valid'] = False
             return pkg
+        ###########################################################################################
         
         row_num=1
         while row:
@@ -200,8 +203,7 @@ class CSVTool():
             except StopIteration:
                 row = False
         
-        pkg['is_valid'] = not pkg['errors']
-            
+        pkg['is_valid'] = not pkg['errors']    
         return pkg
     
     
@@ -257,12 +259,11 @@ class CSVTool():
             except KeyError:
                 row_id = None
             
-            if row_id:  # if the primary key field is not empty
+            if row_id:
                 
                 try:
                     obj, parent_id = self._get_obj_or_none( row_id )
                 except:
-                    #This needs to be fixed to catch the case where a parent_obj doesn't exist
                     raise Exception("More than one entry found. Cannot overwrite all of them.")
                     
                 if obj:
@@ -278,17 +279,18 @@ class CSVTool():
                             instance.fishencounter = fe
                             instance.save()
                             
-                else: # Have row_id but object entry is not in the database.
-                    if parent_id:                          
-                        row.update({"fishencounter":parent_id})
-                    form = self.form(row)  # This is a new database entry, i.e. no id has been set.                    
-                    #form.__setattr__(pk, row_id)
-                    instance = form.save()                    
+                else:    
+                    form = self.form(row)
+                    form.__setattr__(pk, row_id)
+                    instance = form.save()
+                    #form = self.form(row)
+                    #instance.id=int(row['id'])
+                    #instance.save()
                     self.created.append({'row':row_num,'id':instance.id})
                     
             else:
                 # Does not have row_id so just created the entry
-                instance = self.form(row).save() 
+                instance = self.form(row).save()
                 self.created.append({'row':row_num,'id':instance.id})
             try:
                 row = csv.next()    
@@ -329,7 +331,7 @@ class CSVTool():
     
     def _get_existing_form(self, row, obj):
         """
-        Returns a bound form based on the row data and options dict.    
+        Returns an bound form based on the row data and options dict.    
         
         Inputs
         ------
@@ -382,7 +384,8 @@ class CSVTool():
                 try:
                     int(row[name])
                 except:
-                    row[name] = -1                  
+                    row[name] = -1
+                                   
                 out.update({tmp[0]:row[name]})
                 
             else:
@@ -502,37 +505,24 @@ class CSVTool():
             return False
         """
         
-    def _get_parent_obj(self, row_id):
-        """
-        Returns the parent object form the FishEncounter with barcode = row_id or none. 
-        Raises an exception is multiple entries are found. 
-        THIS NEEDS TO BE GENERALIZED.
-        
-        """
-        try:
-            fe = FishEncounter.objects.get(barcode = row_id)                 
-        except FishEncounter.DoesNotExist:
-            raise ParentNotFound           
-        return fe    
-    
     def _get_obj_or_none(self, row_id):
         """
-        Returns an object from the FishEncounter table with barcode = row_id or none. 
+        Returns an object for the row_id or or a list or none. 
         Raises an exception is multiple entries are found. 
-        THIS NEEDS TO BE GENERALIZED.
-        
-        """        
- 
+        """
         if self.parent_key:
             # Need to generalize this.
             
             # if fish encounter does not exist catch exception in _validate_row()
-            # Get the parent object or raise exception if it does not exist. 
-            fe = self._get_parent_obj(row_id)
+            try:
+                fe = FishEncounter.objects.get(barcode = row_id)                 
+            except FishEncounter.DoesNotExist:
+                raise ParentNotFound
+                
             parent_id = fe.id
-            
-            # Look for a local object referring the parent objects 
             obj = self.model.objects.filter(fishencounter = fe)
+            #raise NameError
+            # If more than one object returned, what then?
             if len(obj) > 1:
                 if self.options['duplicate_entry'] == 'overwrite':
                     raise MultipleEntriesFound("Multiple records found. Cannot overwrite all of them.") 
@@ -571,7 +561,7 @@ class CSVTool():
             
             out = {'name':field.attname,
                    'db_type':field.db_type(),
-                   'lookup_codes':field.choices,
+                   'lookup_codes':self._get_field_lookup_codes(field),
                    'related_model':related_model,
                    'help_text':field.help_text,
                    'not_blank':not field.blank,
@@ -614,8 +604,6 @@ class CSVTool():
             self.options.update({'parent_key':""})
         
         return self.OPTIONS[self.app_model]
-    
-    
         
     def _get_form(self):
         """
@@ -639,7 +627,13 @@ class CSVTool():
         for field in self.model._meta.fields:
             if field.choices:
                 lookups.update({field.name:field.choices})
-                
+            if field.__class__.__name__ == 'ForeignKey':
+                related_model = field.rel.to
+                objs = related_model.objects.all()
+                if objs.count() < FK_LOOKUP_MAX:
+                    choices = [(obj.id, obj.__str__()) for obj in objs]
+                    lookups.update({field.name:choices})
+            
             # Ad if field.foreign_key then and there
             # are less than FK_LOOKUP_MAX entries in the related models
             # make a choices list
@@ -647,6 +641,18 @@ class CSVTool():
                 
         self.lookup_codes = lookups
         return self.lookup_codes    
+    
+    def _get_field_lookup_codes(self, field):
+        choices = []
+        if field.choices:
+            choices = field.choices
+        if field.__class__.__name__ == 'ForeignKey':
+            related_model = field.rel.to
+            objs = related_model.objects.all()
+            if objs.count() < FK_LOOKUP_MAX:
+                choices = [(obj.id, obj.__str__()) for obj in objs]
+                
+        return choices
     
     def _get_foreign_keys(self):
         fks = {}
