@@ -107,7 +107,12 @@ class CSVTool():
         return out 
     
     def get_fields_body(self, qs):
+        """
+        Gets fields and body for csv export. 
+        
+        """
         fields = [f['name'] for f in self.fields]
+        #fields = self.fields
         parent_key = self.options['parent_key']
         local_field = ''
         parent_field = ''
@@ -119,13 +124,12 @@ class CSVTool():
         for q in qs:
             row = []
             for f in fields:
-                #
-                if local_field+"_id" == f: 
+                if local_field+"_id" == f:  # If this is a parent_key 
                     obj = q.__getattribute__(local_field)
                     row.append(obj.__getattribute__(parent_field))
-                else:
-                    row.append(q.__getattribute__(f)) 
-            
+                else: # This is not a parent key 
+                    row.append(q.__getattribute__(f))
+                        
             body.append(row)
         
         if parent_field:
@@ -365,7 +369,7 @@ class CSVTool():
         
     def _convert_fk_names(self, row):
         """
-        Loops through a given row and converts it foreign key names to attribute names.
+        Loops through a given row and converts it's foreign key names to attribute names.
         Also converts blank entries to null. 
         Also checks to see if foreign key is an integer. If not sets it to -1 and lets form
         errors handle it.
@@ -380,7 +384,7 @@ class CSVTool():
                         
             tmp = name.split("_id")
             if len(tmp) > 1:
-                # check that foreign key is and integer, if not sets it to -1 and lets form validation handle it
+                # check that foreign key is an integer, if not sets it to -1 and lets form validation handle it
                 try:
                     int(row[name])
                 except:
@@ -558,7 +562,7 @@ class CSVTool():
                         
             if field.__class__.__name__ == 'ForeignKey':
                 related_model = field.rel.to.__name__            
-            
+                                    
             out = {'name':field.attname,
                    'db_type':field.db_type(),
                    'lookup_codes':self._get_field_lookup_codes(field),
